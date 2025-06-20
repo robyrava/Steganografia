@@ -1,11 +1,6 @@
 import os
 from PIL import Image
-
-# --- FUNZIONI DI UTILITÀ ---
-
-def clear_screen():
-    """Pulisce la schermata del terminale."""
-    os.system('cls' if os.name == 'nt' else 'clear')
+from utility import clear_screen
 
 # --- FUNZIONI DI CONVERSIONE E MANIPOLAZIONE DEI BIT ---
 
@@ -15,8 +10,15 @@ def binaryConvert(text: str) -> str:
 
 def binaryConvertBack(binary_str: str) -> str:
     """Converte una stringa binaria in testo (UTF-8)."""
-    byte_array = bytearray(int(binary_str[i:i+8], 2) for i in range(0, len(binary_str), 8))
-    return byte_array.decode('utf-8', errors='ignore')
+    # Assicuriamoci che la lunghezza sia multipla di 8
+    if len(binary_str) % 8 != 0:
+        binary_str = binary_str[:-(len(binary_str) % 8)]
+    
+    try:
+        byte_array = bytearray(int(binary_str[i:i+8], 2) for i in range(0, len(binary_str), 8))
+        return byte_array.decode('utf-8', errors='ignore')
+    except:
+        return ""
 
 def setLastBit(value: int, bit: str) -> int:
     """Modifica l'ultimo bit (LSB) di un valore intero (0-255)."""
@@ -37,8 +39,8 @@ def hideMessage(image_path: str, message: str, output_path: str) -> bool:
         print(f"\nERRORE: Impossibile aprire l'immagine. Dettagli: {e}")
         return False
 
-    # Aggiunge un "terminatore nullo" (8 bit a zero) per sapere dove finisce il messaggio
-    binary_message = binaryConvert(message) + "00000000"
+    # Aggiunge un terminatore più robusto: 16 zeri consecutivi
+    binary_message = binaryConvert(message) + "0000000000000000"
     
     # Controlla se l'immagine è abbastanza grande
     max_bits = img.width * img.height * 3
@@ -53,31 +55,43 @@ def hideMessage(image_path: str, message: str, output_path: str) -> bool:
     img_copy = img.copy()
     pixels = img_copy.load()
     
-    msg_bits = iter(binary_message)
+    bit_index = 0
     
     for y in range(img.height):
         for x in range(img.width):
-            try:
-                r, g, b = pixels[x, y]
-                
-                # Modifica il canale Rosso
-                r = setLastBit(r, next(msg_bits))
-                # Modifica il canale Verde
-                g = setLastBit(g, next(msg_bits))
-                # Modifica il canale Blu
-                b = setLastBit(b, next(msg_bits))
-                
-                pixels[x, y] = (r, g, b)
-            except StopIteration:
+            if bit_index >= len(binary_message):
                 # Tutti i bit sono stati nascosti
                 img_copy.save(output_path)
                 print(f"\nSUCCESSO: Messaggio nascosto e immagine salvata in '{output_path}'.")
                 return True
-    return False
+                
+            r, g, b = pixels[x, y]
+            
+            # Modifica il canale Rosso
+            if bit_index < len(binary_message):
+                r = setLastBit(r, binary_message[bit_index])
+                bit_index += 1
+            
+            # Modifica il canale Verde
+            if bit_index < len(binary_message):
+                g = setLastBit(g, binary_message[bit_index])
+                bit_index += 1
+            
+            # Modifica il canale Blu
+            if bit_index < len(binary_message):
+                b = setLastBit(b, binary_message[bit_index])
+                bit_index += 1
+            
+            pixels[x, y] = (r, g, b)
+    
+    img_copy.save(output_path)
+    print(f"\nSUCCESSO: Messaggio nascosto e immagine salvata in '{output_path}'.")
+    return True
 
 def getMessage(image_path: str) -> str | None:
     """
     Recupera un messaggio di testo nascosto da un'immagine.
+    Questa versione è più robusta: prima estrae tutti i bit, poi cerca il terminatore.
     """
     try:
         img = Image.open(image_path)
@@ -92,25 +106,38 @@ def getMessage(image_path: str) -> str | None:
         img = img.convert("RGB")
         
     pixels = img.load()
-    extracted_bits = []
     
+    # 1. Estrai tutti i bit LSB dall'immagine in un'unica stringa
+    extracted_bits_list = []
     for y in range(img.height):
         for x in range(img.width):
             r, g, b = pixels[x, y]
-            
-            extracted_bits.append(format(r, '08b')[-1])
-            extracted_bits.append(format(g, '08b')[-1])
-            extracted_bits.append(format(b, '08b')[-1])
-            
-            # Controlla ogni 8 bit se abbiamo trovato il terminatore nullo
-            if len(extracted_bits) % 8 == 0:
-                last_byte = "".join(extracted_bits[-8:])
-                if last_byte == "00000000":
-                    final_bits = "".join(extracted_bits[:-8])
-                    return binaryConvertBack(final_bits)
-
-    print("\nERRORE: Nessun messaggio (o terminatore di messaggio) trovato.")
-    return None
+            extracted_bits_list.append(format(r, '08b')[-1])
+            extracted_bits_list.append(format(g, '08b')[-1])
+            extracted_bits_list.append(format(b, '08b')[-1])
+    
+    all_bits = "".join(extracted_bits_list)
+    
+    # 2. Cerca il terminatore del messaggio
+    terminator = "0000000000000000"
+    terminator_pos = all_bits.find(terminator)
+    
+    if terminator_pos != -1:
+        # 3. Trovato! Prendi tutti i bit *prima* del terminatore
+        message_bits = all_bits[:terminator_pos]
+        
+        # 4. Converti i bit del messaggio in testo
+        message = binaryConvertBack(message_bits)
+        
+        if message:
+            return message
+        else:
+            print("\nERRORE: Dati trovati ma impossibili da decodificare in testo (potrebbe essere un file binario).")
+            return None
+    else:
+        # 5. Se il terminatore non viene trovato, non c'è nessun messaggio nascosto.
+        print("\nERRORE: Nessun messaggio (o terminatore di messaggio) trovato nell'immagine.")
+        return None
 
 # --- GESTIONE MENU E INPUT UTENTE ---
 
@@ -153,7 +180,29 @@ def handle_recover_text():
     message = getMessage(source_img)
     
     if message:
-        print(f"\nSUCCESSO: Messaggio recuperato:")
-        print("-" * 30)
-        print(message)
-        print("-" * 30)
+        print(f"\nSUCCESSO: Messaggio recuperato:")             
+        # Salva automaticamente il testo in un file
+        save_extracted_text(source_img, message)
+
+
+def save_extracted_text(image_path: str, message: str) -> bool:
+    """
+    Salva il testo estratto in un file .txt con nome basato sull'immagine sorgente.
+    """
+    try:
+        # Costruisce il percorso del file di output
+        dir_name = os.path.dirname(image_path)
+        base_name = os.path.basename(image_path)
+        file_name, _ = os.path.splitext(base_name)
+        output_path = os.path.join(dir_name, f"{file_name}.txt")
+        
+        # Salva il messaggio nel file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(message)
+        
+        print(f"\nTesto salvato in: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"\nERRORE nel salvare il file: {e}")
+        return False
