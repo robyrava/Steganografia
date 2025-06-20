@@ -3,6 +3,8 @@
 from funzioni.text_in_image import handle_hide_text, handle_recover_text
 from utility import clear_screen
 from funzioni.image_in_image import handle_hide_image, handle_recover_image
+# --- NUOVA IMPORTAZIONE ---
+from funzioni.file_in_image import handle_hide_file, handle_recover_file
 
 # --- GESTIONE MENU E INPUT UTENTE ---
 
@@ -13,14 +15,19 @@ def sub_menu(action: str):
         print(f"--- Cosa vuoi {action}? ---")
         print("1) Stringa di testo")
         print("2) Immagine")
-        print("3) Torna indietro")
+        # --- NUOVA OPZIONE ---
+        print("3) File generico")
+        print("4) Torna indietro")
         choice = input("Scegli un'opzione: ")
 
         if choice == '1':
             return 1
         elif choice == '2':
             return 2
+        # --- NUOVA OPZIONE ---
         elif choice == '3':
+            return 3
+        elif choice == '4':
             return None # Per tornare indietro
         else:
             print("Scelta non valida. Riprova.")
@@ -43,12 +50,16 @@ def main_menu():
                 handle_hide_text()
             elif sub_choice == 2:
                 handle_hide_image()
+            elif sub_choice == 3:
+                handle_hide_file()
         elif main_choice == '2':
             sub_choice = sub_menu("Recuperare")
             if sub_choice == 1:
                 handle_recover_text()
             elif sub_choice == 2:
                 handle_recover_image()
+            elif sub_choice == 3:
+                handle_recover_file()
         elif main_choice == '3':
             clear_screen()
             break
