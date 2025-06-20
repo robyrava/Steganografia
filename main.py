@@ -1,6 +1,7 @@
 # Script per la steganografia testuale con menu interattivo.
 # Permette di nascondere e recuperare stringhe di testo da immagini.
-from funzioni.text_in_image import handle_hide_text, handle_recover_text, clear_screen
+from funzioni.text_in_image import handle_hide_text, handle_recover_text
+from utility import clear_screen
 from funzioni.image_in_image import handle_hide_image, handle_recover_image
 
 # --- GESTIONE MENU E INPUT UTENTE ---
@@ -49,7 +50,7 @@ def main_menu():
             elif sub_choice == 2:
                 handle_recover_image()
         elif main_choice == '3':
-            print("Arrivederci!")
+            clear_screen()
             break
         else:
             print("Scelta non valida. Riprova.")

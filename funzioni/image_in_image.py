@@ -2,122 +2,140 @@ import numpy as np
 from PIL import Image
 import os
 
-METADATA_TERMINATOR = "0" * 16  # Usiamo un terminatore di 16 bit per sicurezza
-METADATA_MAX_LEN_BITS = 4096 # Riserviamo i primi 512 byte (4096 bit) per i metadati
+# Spazio massimo riservato in bit per l'header dei metadati (lunghezza + dati).
+# 4096 bit = 512 byte.
+METADATA_HEADER_MAX_BITS = 4096
+# Bit usati per memorizzare la lunghezza dei metadati (2 byte = 16 bit).
+METADATA_LEN_BITS = 16
 
 def setLastNBits(value: int, bits: str, n: int) -> int:
-    """Setta gli ultimi n bits di un numero"""
+    """Setta gli ultimi n bits di un numero."""
     value = format(value, '08b')
     if len(bits) < n:
         bits = '0' * (n - len(bits)) + bits
     value = value[:-n] + bits
-    value = int(value, 2)
-    value = min(255, max(0, value))
-    return value
+    return int(value, 2)
+
+def _binary_string_to_bytes(bin_str: str) -> bytes:
+    """Converte una stringa di bit (es. '0100100001101001') in bytes."""
+    return int(bin_str, 2).to_bytes((len(bin_str) + 7) // 8, 'big')
 
 def _hide_metadata(image_array, params):
-    """Nasconde i metadati (dizionario di parametri) all'inizio dell'array di un'immagine."""
+    """
+    Nasconde i metadati usando un prefisso di lunghezza.
+    Formato: [Lunghezza dei metadati (16 bit)] [Dati dei metadati (N*8 bit)]
+    """
     metadata_string = f"{params['w']},{params['h']},{params['lsb']},{params['msb']},{params['div']}"
-    binary_metadata = ''.join(format(ord(char), '08b') for char in metadata_string) + METADATA_TERMINATOR
-
-    if len(binary_metadata) > METADATA_MAX_LEN_BITS:
-        raise ValueError("I metadati sono troppo grandi per essere nascosti.")
-
-    for i in range(len(binary_metadata)):
-        image_array[i] = (image_array[i] & 254) | int(binary_metadata[i])
+    metadata_bytes = metadata_string.encode('utf-8')
     
+    # Controlla se i metadati sono troppo grandi
+    if len(metadata_bytes) * 8 + METADATA_LEN_BITS > METADATA_HEADER_MAX_BITS:
+        raise ValueError("I metadati sono troppo grandi per lo spazio riservato.")
+
+    # Crea il prefisso di lunghezza (16 bit)
+    len_prefix_bin = format(len(metadata_bytes), f'0{METADATA_LEN_BITS}b')
+    
+    # Crea il payload binario dei metadati
+    metadata_bin = ''.join(format(byte, '08b') for byte in metadata_bytes)
+    
+    # Unisci prefisso e dati
+    full_header_bin = len_prefix_bin + metadata_bin
+    
+    # Scrivi l'header bit per bit nel LSB dell'array dell'immagine
+    for i in range(len(full_header_bin)):
+        image_array[i] = (image_array[i] & 254) | int(full_header_bin[i])
+        
     return image_array
 
 def _get_metadata(image_array):
-    """Recupera i metadati dall'inizio dell'array di un'immagine."""
-    extracted_bits = ""
-    for i in range(METADATA_MAX_LEN_BITS):
-        extracted_bits += str(image_array[i] & 1)
-        if extracted_bits.endswith(METADATA_TERMINATOR):
-            # Trovato il terminatore
-            binary_string = extracted_bits[:-len(METADATA_TERMINATOR)]
-            metadata_string = ''.join(chr(int(binary_string[i:i+8], 2)) for i in range(0, len(binary_string), 8))
-            parts = metadata_string.split(',')
-            return {
-                "w": int(parts[0]),
-                "h": int(parts[1]),
-                "lsb": int(parts[2]),
-                "msb": int(parts[3]),
-                "div": float(parts[4])
-            }
-    raise ValueError("Terminatore dei metadati non trovato.")
+    """Recupera i metadati leggendo prima il prefisso di lunghezza."""
+    # 1. Leggi il prefisso di lunghezza (i primi 16 bit)
+    len_prefix_bin = "".join(str(image_array[i] & 1) for i in range(METADATA_LEN_BITS))
+    metadata_len_bytes = int(len_prefix_bin, 2)
+    
+    # Controllo di sanità
+    if metadata_len_bytes * 8 + METADATA_LEN_BITS > METADATA_HEADER_MAX_BITS:
+        raise ValueError("Lunghezza dei metadati non valida o corrotta.")
+        
+    # 2. Leggi i dati dei metadati della lunghezza specificata
+    start_index = METADATA_LEN_BITS
+    end_index = start_index + (metadata_len_bytes * 8)
+    
+    metadata_bin = "".join(str(image_array[i] & 1) for i in range(start_index, end_index))
+    
+    # 3. Converti da binario a stringa e analizza
+    metadata_bytes = _binary_string_to_bytes(metadata_bin)
+    metadata_string = metadata_bytes.decode('utf-8')
+    
+    parts = metadata_string.split(',')
+    if len(parts) < 5:
+        raise ValueError("Metadati corrotti o incompleti.")
 
+    return {
+        "w": int(parts[0]),
+        "h": int(parts[1]),
+        "lsb": int(parts[2]),
+        "msb": int(parts[3]),
+        "div": float(parts[4])
+    }
 
 def hideImage(img1: Image, img2: Image, new_img: str, lsb=4, msb=4):
-    """Nasconde un'immagine in un'altra, includendo i metadati per il recupero."""
-    if img1.mode != "RGB":
-        img1 = img1.convert("RGB")
-    if img2.mode != "RGB":
-        img2 = img2.convert("RGB")
+    """Nasconde un'immagine in un'altra."""
+    if img1.mode != "RGB": img1 = img1.convert("RGB")
+    if img2.mode != "RGB": img2 = img2.convert("RGB")
 
-    if (lsb * img1.width * img1.height) < (msb * img2.width * img2.height) + METADATA_MAX_LEN_BITS:
-        raise ValueError("L'immagine contenitore è troppo piccola.")
+    required_space_bits = (img2.width * img2.height * 3 * msb) + METADATA_HEADER_MAX_BITS
+    available_space_bits = (img1.width * img1.height * 3 * lsb)
+    if available_space_bits < required_space_bits:
+        raise ValueError("L'immagine contenitore è troppo piccola per i parametri scelti.")
 
     arr1 = np.array(img1).flatten().copy()
     arr2 = np.array(img2).flatten().copy()
 
-    work_array = arr1[METADATA_MAX_LEN_BITS:]
-    
-    div = (len(work_array) * lsb) / (len(arr2) * msb)
+    payload_offset = METADATA_HEADER_MAX_BITS
+    payload_space_len = len(arr1) - payload_offset
+    div = (payload_space_len * lsb) / (len(arr2) * msb) if (len(arr2) * msb) > 0 else 0
 
-    i, j = 0, 0
+    i = 0
     pos = 0.0
     bit_queue = ""
     
     while i < len(arr2):
-        # Estrae msb bit da ogni canale di arr2
         r, g, b = arr2[i], arr2[i + 1], arr2[i + 2]
         bit_queue += format(r, '08b')[:msb]
         bit_queue += format(g, '08b')[:msb]
         bit_queue += format(b, '08b')[:msb]
         
         while len(bit_queue) >= lsb * 3:
-            if round(pos) + 2 < len(work_array):
-                # Estrae lsb*3 bit dalla coda
+            j_abs = round(pos) + payload_offset
+            if j_abs + 2 < len(arr1):
                 bits_to_hide = bit_queue[:lsb*3]
                 bit_queue = bit_queue[lsb*3:]
-
-                j = round(pos)
-                # Nasconde i bit in arr1
                 r_bits, g_bits, b_bits = bits_to_hide[:lsb], bits_to_hide[lsb:2*lsb], bits_to_hide[2*lsb:3*lsb]
-                
-                work_array[j] = setLastNBits(work_array[j], r_bits, lsb)
-                work_array[j + 1] = setLastNBits(work_array[j + 1], g_bits, lsb)
-                work_array[j + 2] = setLastNBits(work_array[j + 2], b_bits, lsb)
-                
+                arr1[j_abs] = setLastNBits(arr1[j_abs], r_bits, lsb)
+                arr1[j_abs + 1] = setLastNBits(arr1[j_abs + 1], g_bits, lsb)
+                arr1[j_abs + 2] = setLastNBits(arr1[j_abs + 2], b_bits, lsb)
                 pos += div * 3
             else:
-                # Se non c'è più spazio in arr1, interrompi
                 bit_queue = ""
                 break
         i += 3
 
-    # Ora nascondiamo i metadati all'inizio dell'array originale
     params = {"w": img2.width, "h": img2.height, "lsb": lsb, "msb": msb, "div": div}
     arr1 = _hide_metadata(arr1, params)
 
-    img1_copy = Image.fromarray(arr1.reshape(img1.height, img1.width, 3))
-    img1_copy.save(new_img)
-
+    Image.fromarray(arr1.reshape(img1.height, img1.width, 3)).save(new_img)
 
 def getImage(img: Image, new_img: str) -> Image:
-    """Ottieni un'immagine da un'altra, leggendo prima i metadati necessari."""
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-        
+    """Recupera un'immagine da un'altra."""
+    if img.mode != "RGB": img = img.convert("RGB")
     arr = np.array(img).flatten().copy()
     
-    # 1. Recupera i metadati
     params = _get_metadata(arr)
     width, height, lsb, msb, div = params['w'], params['h'], params['lsb'], params['msb'], params['div']
 
-    # 2. Estrai l'immagine usando i metadati
-    work_array = arr[METADATA_MAX_LEN_BITS:]
+    payload_offset = METADATA_HEADER_MAX_BITS
+    work_array = arr[payload_offset:]
     size = width * height * 3
     res = np.zeros(size, dtype=np.uint8)
     
@@ -127,29 +145,36 @@ def getImage(img: Image, new_img: str) -> Image:
 
     while n < size:
         j = round(pos)
-        if j + 2 >= len(work_array):
-            break
-
+        if j + 2 >= len(work_array): break
         r_bits = format(work_array[j], '08b')[-lsb:]
         g_bits = format(work_array[j+1], '08b')[-lsb:]
         b_bits = format(work_array[j+2], '08b')[-lsb:]
         bits += r_bits + g_bits + b_bits
         
         while len(bits) >= msb:
-            if n >= size:
-                break
-            
+            if n >= size: break
             byte_bits = bits[:msb]
             bits = bits[msb:]
-            
             res[n] = int(byte_bits.ljust(8, '0'), 2)
             n += 1
-            
         pos += div * 3
 
     res_img = Image.fromarray(res.reshape(height, width, 3))
     res_img.save(new_img)
     return res_img
+
+def find_optimal_params(container_img: Image, secret_img: Image):
+    """Calcola i parametri lsb e msb ottimali."""
+    container_pixels = container_img.width * container_img.height
+    secret_pixels = secret_img.width * secret_img.height
+    
+    for lsb in range(1, 9):
+        for msb in range(8, 0, -1):
+            available_space = (container_pixels * 3 * lsb)
+            required_space = (secret_pixels * 3 * msb) + METADATA_HEADER_MAX_BITS
+            if available_space >= required_space:
+                return lsb, msb
+    return None, None
 
 def get_image_path(prompt: str) -> str:
     """Chiede all'utente un percorso per un'immagine e controlla se esiste."""
@@ -165,46 +190,55 @@ def handle_hide_image():
     print("--- Nascondi Immagine in Immagine ---")
     container_img_path = get_image_path("Percorso dell'immagine contenitore: ")
     secret_img_path = get_image_path("Percorso dell'immagine da nascondere: ")
-    
-    try:
-        lsb = int(input("Numero di bit meno significativi da usare (lsb, 1-8, default 4): ") or "4")
-        msb = int(input("Numero di bit più significativi da usare (msb, 1-8, default 4): ") or "4")
-        if not (1 <= lsb <= 8 and 1 <= msb <= 8):
-            raise ValueError("LSB e MSB devono essere tra 1 e 8")
-    except ValueError as e:
-        print(f"Input non valido: {e}")
-        return
 
     container_img = Image.open(container_img_path)
     secret_img = Image.open(secret_img_path)
-    
-    dir_name = os.path.dirname(container_img_path)
-    base_name = os.path.basename(container_img_path)
-    file_name, _ = os.path.splitext(base_name)
-    output_img_path = os.path.join(dir_name, f"{file_name}_steg_img.png")
+    lsb, msb = None, None
+
+    print("\nScegli la modalità di occultamento:")
+    print("1) Automatica (consigliato)")
+    print("2) Manuale (per utenti esperti)")
+    mode = input("Scelta: ").strip()
+
+    if mode == '1':
+        print("\nCalcolo dei parametri ottimali in corso...")
+        lsb, msb = find_optimal_params(container_img, secret_img)
+        if lsb is None:
+            print("\nERRORE: L'immagine contenitore è troppo piccola.")
+            return
+        print(f"Parametri ottimali calcolati: lsb={lsb}, msb={msb}")
+    elif mode == '2':
+        try:
+            lsb = int(input("Numero di bit LSB da usare (1-8): ") or "4")
+            msb = int(input("Numero di bit MSB da usare (1-8): ") or "4")
+            if not (1 <= lsb <= 8 and 1 <= msb <= 8):
+                raise ValueError("LSB e MSB devono essere tra 1 e 8")
+        except ValueError as e:
+            print(f"Input non valido: {e}")
+            return
+    else:
+        print("Scelta non valida.")
+        return
+
+    output_path = os.path.join(os.path.dirname(container_img_path), f"{os.path.splitext(os.path.basename(container_img_path))[0]}_steg_img.png")
     
     print("\nInizio occultamento dell'immagine...")
     try:
-        hideImage(container_img, secret_img, output_img_path, lsb, msb)
-        print(f"\nSUCCESSO: Immagine nascosta e salvata in '{output_img_path}'.")
-        print("I parametri di recupero sono stati inclusi nell'immagine.")
+        hideImage(container_img, secret_img, output_path, lsb, msb)
+        print(f"\nSUCCESSO: Immagine nascosta e salvata in '{output_path}'.")
     except ValueError as e:
         print(f"\nERRORE: {e}")
 
-
 def handle_recover_image():
-    """Gestisce il flusso per recuperare un'immagine da un'altra in modo automatico."""
+    """Gestisce il flusso per recuperare un'immagine da un'altra."""
     print("--- Recupera Immagine da Immagine ---")
-    source_img_path = get_image_path("Percorso dell'immagine con l'immagine nascosta: ")
-    
+    source_img_path = get_image_path("Percorso dell'immagine con i dati nascosti: ")
     source_img = Image.open(source_img_path)
-    
-    dir_name = os.path.dirname(source_img_path)
-    output_img_path = os.path.join(dir_name, f"recovered_image_auto.png")
+    output_path = os.path.join(os.path.dirname(source_img_path), f"recovered_image.png")
 
     print("\nInizio recupero automatico dell'immagine...")
     try:
-        getImage(source_img, output_img_path)
-        print(f"\nSUCCESSO: Immagine recuperata e salvata in '{output_img_path}'.")
+        getImage(source_img, output_path)
+        print(f"\nSUCCESSO: Immagine recuperata e salvata in '{output_path}'.")
     except Exception as e:
         print(f"\nERRORE durante il recupero: {e}")
