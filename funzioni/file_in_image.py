@@ -66,7 +66,14 @@ def hideFile(container_img_path: str, secret_file_path: str, output_img_path: st
     available_bits = container_img.width * container_img.height * 3 # Usando 1 LSB
 
     if available_bits < required_bits:
-        raise ValueError(f"Immagine contenitore troppo piccola. Spazio richiesto: {required_bits / 8000:.2f} KB, disponibile: {available_bits / 8000:.2f} KB")
+        available_kb = available_bits / 8 / 1024
+        required_kb = required_bits / 8 / 1024
+        file_kb = filesize / 1024
+        raise ValueError(f"Immagine contenitore troppo piccola.\n"
+                        f"Dimensione file: {filesize:,} byte ({file_kb:.2f} KB)\n"
+                        f"Spazio richiesto: {required_kb:.2f} KB\n" 
+                        f"Spazio disponibile: {available_kb:.2f} KB\n"
+                        f"Mancano: {required_kb - available_kb:.2f} KB")
 
     arr = np.array(container_img).flatten().copy()
     
@@ -116,6 +123,38 @@ def recoverFile(steg_img_path: str, output_dir: str):
         
     return output_path
 
+def calculate_file_capacity(container_img_path: str):
+    """Calcola e mostra la capacità massima di file che l'immagine può contenere."""
+    try:
+        container_img = Image.open(container_img_path)
+        if container_img.mode != "RGB":
+            container_img = container_img.convert("RGB")
+        
+        # Calcola la capacità totale in bit (3 canali RGB × 1 bit LSB per canale)
+        total_bits = container_img.width * container_img.height * 3
+        
+        # Sottrae lo spazio riservato per i metadati
+        available_bits = total_bits - METADATA_HEADER_MAX_BITS
+        available_bytes = available_bits // 8
+        available_kb = available_bytes / 1024
+        
+        print(f"\n--- Capacità dell'immagine contenitore ({container_img.width}x{container_img.height} pixel) ---")
+        print(f"Capacità totale: {total_bits:,} bit")
+        print(f"Spazio riservato metadati: {METADATA_HEADER_MAX_BITS:,} bit ({METADATA_HEADER_MAX_BITS//8:,} byte)")
+        print(f"Capacità disponibile per file: {available_bits:,} bit")
+        print(f"Capacità disponibile: {available_bytes:,} byte ({available_kb:.2f} KB)")
+        
+        # Raccomandazione per evitare distorsioni
+        safe_capacity_kb = available_kb * 0.1  # 10% per sicurezza
+        print(f"\nRaccomandazione: Per evitare distorsioni visibili nell'immagine,")
+        print(f"mantieni i file sotto i {safe_capacity_kb:.2f} KB.")
+        
+        return available_bytes
+        
+    except Exception as e:
+        print(f"ERRORE nel calcolare la capacità: {e}")
+        return 0
+
 # --- Funzioni di gestione per l'interfaccia utente ---
 
 def get_existing_file_path(prompt: str) -> str:
@@ -131,8 +170,42 @@ def handle_hide_file():
     """Gestisce il flusso per nascondere un file."""
     print("--- Nascondi File in Immagine ---")
     try:
-        container_path = get_existing_file_path("Percorso dell'immagine contenitore (.png, .jpg, etc.): ")
-        secret_path = get_existing_file_path("Percorso del file da nascondere (qualsiasi tipo): ")
+        container_path = get_existing_file_path("Percorso dell'immagine contenitore: ")
+        
+        # Mostra la capacità dell'immagine contenitore
+        max_capacity_bytes = calculate_file_capacity(container_path)
+        if max_capacity_bytes == 0:
+            return
+        
+        secret_path = get_existing_file_path("\nPercorso del file da nascondere (qualsiasi tipo): ")
+        
+        # Verifica la dimensione del file da nascondere
+        file_size = os.path.getsize(secret_path)
+        file_size_kb = file_size / 1024
+        
+        if file_size > max_capacity_bytes:
+            print(f"\nERRORE: Il file è troppo grande per essere nascosto!")
+            print(f"Dimensione del file: {file_size:,} byte ({file_size_kb:.2f} KB)")
+            print(f"Capacità massima: {max_capacity_bytes:,} byte ({max_capacity_bytes/1024:.2f} KB)")
+            print(f"Eccesso: {file_size - max_capacity_bytes:,} byte ({(file_size - max_capacity_bytes)/1024:.2f} KB)")
+            return
+        
+        # Mostra statistiche del file
+        usage_percentage = (file_size / max_capacity_bytes) * 100
+        print(f"\nStatistiche del file da nascondere:")
+        print(f"Nome: {os.path.basename(secret_path)}")
+        print(f"Dimensione: {file_size:,} byte ({file_size_kb:.2f} KB)")
+        print(f"Utilizzo capacità: {usage_percentage:.1f}%")
+        
+        # Avviso per file grandi
+        safe_limit = max_capacity_bytes * 0.1
+        if file_size > safe_limit:
+            print(f"\nATTENZIONE: Il file è relativamente grande ({usage_percentage:.1f}% della capacità).")
+            print("    Potrebbero essere visibili lievi distorsioni nell'immagine risultante.")
+            confirm = input("    Continuare comunque? (s/n): ").lower().strip()
+            if confirm not in ['s', 'si', 'sì', 'y', 'yes']:
+                print("Operazione annullata.")
+                return
         
         dir_name = os.path.dirname(container_path)
         base_name, _ = os.path.splitext(os.path.basename(container_path))
@@ -158,3 +231,12 @@ def handle_recover_file():
 
     except (ValueError, Exception) as e:
         print(f"\nERRORE durante il recupero: {e}")
+
+def handle_show_file_capacity():
+    """Gestisce il flusso per mostrare solo la capacità di file di un'immagine."""
+    print("--- Analisi Capacità File Immagine ---")
+    try:
+        container_path = get_existing_file_path("Percorso dell'immagine da analizzare: ")
+        calculate_file_capacity(container_path)
+    except Exception as e:
+        print(f"ERRORE: {e}")

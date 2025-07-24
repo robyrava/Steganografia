@@ -189,9 +189,13 @@ def handle_hide_image():
     """Gestisce il flusso per nascondere un'immagine in un'altra."""
     print("--- Nascondi Immagine in Immagine ---")
     container_img_path = get_image_path("Percorso dell'immagine contenitore: ")
-    secret_img_path = get_image_path("Percorso dell'immagine da nascondere: ")
-
+    
     container_img = Image.open(container_img_path)
+    
+    # Mostra la capacità dell'immagine contenitore
+    show_container_capacity(container_img)
+    
+    secret_img_path = get_image_path("\nPercorso dell'immagine da nascondere: ")
     secret_img = Image.open(secret_img_path)
     lsb, msb = None, None
 
@@ -242,3 +246,39 @@ def handle_recover_image():
         print(f"\nSUCCESSO: Immagine recuperata e salvata in '{output_path}'.")
     except Exception as e:
         print(f"\nERRORE durante il recupero: {e}")
+
+def show_container_capacity(container_img: Image):
+    """Mostra la capacità dell'immagine contenitore per ogni valore di LSB possibile."""
+    container_pixels = container_img.width * container_img.height
+    
+    print(f"\n--- Capacità dell'immagine contenitore ({container_img.width}x{container_img.height} pixel) ---")
+    print("LSB | Capacità totale | Capacità disponibile | Dimensione max immagine nascosta")
+    print("----|-----------------|---------------------|--------------------------------")
+    
+    for lsb in range(1, 9):
+        # Capacità totale in bit (3 canali RGB)
+        total_capacity_bits = container_pixels * 3 * lsb
+        
+        # Capacità disponibile sottraendo lo spazio per i metadati
+        available_capacity_bits = total_capacity_bits - METADATA_HEADER_MAX_BITS
+        
+        # Capacità in KB (1 KB = 1024 byte)
+        total_capacity_kb = (total_capacity_bits // 8) / 1024
+        available_capacity_kb = (available_capacity_bits // 8) / 1024
+        
+        # Dimensione massima dell'immagine nascosta (assumendo MSB=8 per il caso peggiore)
+        # Ogni pixel dell'immagine nascosta richiede 3*8=24 bit
+        max_hidden_pixels = available_capacity_bits // 24
+        max_hidden_width = int(max_hidden_pixels ** 0.5)  # Approssimazione quadrata
+        
+        print(f" {lsb}  | {total_capacity_kb:>11.1f} KB | {available_capacity_kb:>16.1f} KB | {max_hidden_width}x{max_hidden_width} pixel (~{max_hidden_pixels:,} pixel)")
+    
+    print("\nNota: Le dimensioni mostrate sono approssimative e assumono MSB=8 (caso peggiore).")
+    print("Con valori di MSB più bassi, è possibile nascondere immagini più grandi.")
+
+def handle_show_capacity():
+    """Gestisce il flusso per mostrare solo la capacità di un'immagine contenitore."""
+    print("--- Analisi Capacità Immagine Contenitore ---")
+    container_img_path = get_image_path("Percorso dell'immagine da analizzare: ")
+    container_img = Image.open(container_img_path)
+    show_container_capacity(container_img)

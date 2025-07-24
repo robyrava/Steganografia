@@ -45,8 +45,12 @@ def hideMessage(image_path: str, message: str, output_path: str) -> bool:
     # Controlla se l'immagine è abbastanza grande
     max_bits = img.width * img.height * 3
     if len(binary_message) > max_bits:
+        available_chars = (max_bits - 16) // 8  # Sottrae il terminatore
+        message_chars = len(message)
         print(f"\nERRORE: L'immagine è troppo piccola per contenere il messaggio.")
-        print(f"Spazio richiesto: {len(binary_message)} bits. Spazio disponibile: {max_bits} bits.")
+        print(f"Spazio richiesto: {len(binary_message)} bit ({message_chars:,} caratteri)")
+        print(f"Spazio disponibile: {max_bits} bit ({available_chars:,} caratteri max)")
+        print(f"Ridurre il messaggio di {message_chars - available_chars:,} caratteri.")
         return False
 
     if img.mode != "RGB":
@@ -155,10 +159,33 @@ def handle_hide_text():
     clear_screen()
     print("--- Nascondi Stringa di Testo in Immagine ---")
     source_img = get_image_path("Percorso dell'immagine sorgente: ")
-    message = input("Inserisci il messaggio da nascondere: ")
+    
+    # Mostra la capacità dell'immagine
+    max_chars = calculate_text_capacity(source_img)
+    if max_chars == 0:
+        return
+    
+    print(f"\nNota: Per evitare distorsioni visibili, mantieni il messaggio sotto i {max_chars//10:,} caratteri.")
+    
+    message = input("\nInserisci il messaggio da nascondere: ")
     if not message:
         print("ERRORE: il messaggio non può essere vuoto.")
         return
+    
+    # Verifica che il messaggio non sia troppo lungo
+    message_length = len(message)
+    if message_length > max_chars:
+        print(f"\nERRORE: Il messaggio è troppo lungo!")
+        print(f"Lunghezza del messaggio: {message_length:,} caratteri")
+        print(f"Capacità massima: {max_chars:,} caratteri")
+        print(f"Eccesso: {message_length - max_chars:,} caratteri")
+        return
+    
+    # Mostra statistiche del messaggio
+    usage_percentage = (message_length / max_chars) * 100
+    print(f"\nStatistiche del messaggio:")
+    print(f"Lunghezza: {message_length:,} caratteri")
+    print(f"Utilizzo capacità: {usage_percentage:.1f}%")
     
     # Costruisce il percorso di output nella stessa cartella dell'input
     dir_name = os.path.dirname(source_img)
@@ -180,7 +207,7 @@ def handle_recover_text():
     message = getMessage(source_img)
     
     if message:
-        print(f"\nSUCCESSO: Messaggio recuperato:")             
+        print(f"\n Messaggio recuperato con successo!")             
         # Salva automaticamente il testo in un file
         save_extracted_text(source_img, message)
 
@@ -206,3 +233,43 @@ def save_extracted_text(image_path: str, message: str) -> bool:
     except Exception as e:
         print(f"\nERRORE nel salvare il file: {e}")
         return False
+
+def calculate_text_capacity(image_path: str):
+    """Calcola e mostra la capacità massima di caratteri che l'immagine può contenere."""
+    try:
+        img = Image.open(image_path)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        
+        # Calcola la capacità totale in bit (3 canali RGB × 1 bit LSB per canale)
+        total_bits = img.width * img.height * 3
+        
+        # Sottrae i bit per il terminatore (16 bit = "0000000000000000")
+        terminator_bits = 16
+        available_bits = total_bits - terminator_bits
+        
+        # Ogni carattere UTF-8 può occupare da 1 a 4 byte (8-32 bit)
+        # Per essere sicuri, calcoliamo basandoci su caratteri a 1 byte (8 bit)
+        max_chars_safe = available_bits // 8
+        
+        # Calcola anche la capacità teorica massima per caratteri ASCII (7 bit effettivi)
+        max_chars_ascii = available_bits // 7
+        
+        print(f"\n--- Capacità dell'immagine contenitore ({img.width}x{img.height} pixel) ---")
+        print(f"Capacità totale disponibile: {available_bits:,} bit ({available_bits/8:.1f} KB)")
+        print(f"Caratteri massimi (UTF-8 sicuro): {max_chars_safe:,} caratteri")
+        print(f"Caratteri massimi (solo ASCII): {max_chars_ascii:,} caratteri")
+        print(f"Pagine di testo approssimative: ~{max_chars_safe//2000:.1f} pagine (2000 caratteri/pagina)")
+        
+        return max_chars_safe
+        
+    except Exception as e:
+        print(f"ERRORE nel calcolare la capacità: {e}")
+        return 0
+
+def handle_show_text_capacity():
+    """Gestisce il flusso per mostrare solo la capacità di testo di un'immagine."""
+    clear_screen()
+    print("--- Analisi Capacità Testo Immagine ---")
+    source_img = get_image_path("Percorso dell'immagine da analizzare: ")
+    calculate_text_capacity(source_img)
