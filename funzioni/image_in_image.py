@@ -79,7 +79,7 @@ def _get_metadata(image_array):
         "div": float(parts[4])
     }
 
-def hideImage(img1: Image, img2: Image, new_img: str, lsb=4, msb=4):
+def hideImage(img1: Image, img2: Image, new_img: str, lsb=4, msb=4, custom_div=None):
     """Nasconde un'immagine in un'altra."""
     if img1.mode != "RGB": img1 = img1.convert("RGB")
     if img2.mode != "RGB": img2 = img2.convert("RGB")
@@ -94,7 +94,12 @@ def hideImage(img1: Image, img2: Image, new_img: str, lsb=4, msb=4):
 
     payload_offset = METADATA_HEADER_MAX_BITS
     payload_space_len = len(arr1) - payload_offset
-    div = (payload_space_len * lsb) / (len(arr2) * msb) if (len(arr2) * msb) > 0 else 0
+    
+    # Usa il div personalizzato se fornito, altrimenti calcola automaticamente
+    if custom_div is not None:
+        div = custom_div
+    else:
+        div = (payload_space_len * lsb) / (len(arr2) * msb) if (len(arr2) * msb) > 0 else 0
 
     i = 0
     pos = 0.0
@@ -176,6 +181,17 @@ def find_optimal_params(container_img: Image, secret_img: Image):
                 return lsb, msb
     return None, None
 
+def calculate_optimal_div(container_img: Image, secret_img: Image, lsb: int, msb: int):
+    """Calcola il valore di div ottimale per i parametri dati."""
+    arr1_len = container_img.width * container_img.height * 3
+    arr2_len = secret_img.width * secret_img.height * 3
+    
+    payload_offset = METADATA_HEADER_MAX_BITS
+    payload_space_len = arr1_len - payload_offset
+    
+    optimal_div = (payload_space_len * lsb) / (arr2_len * msb) if (arr2_len * msb) > 0 else 0
+    return optimal_div
+
 def get_image_path(prompt: str) -> str:
     """Chiede all'utente un percorso per un'immagine e controlla se esiste."""
     while True:
@@ -210,13 +226,41 @@ def handle_hide_image():
         if lsb is None:
             print("\nERRORE: L'immagine contenitore è troppo piccola.")
             return
+        
+        # Calcola il div ottimale
+        optimal_div = calculate_optimal_div(container_img, secret_img, lsb, msb)
         print(f"Parametri ottimali calcolati: lsb={lsb}, msb={msb}")
+        print(f"Valore div ottimale: {optimal_div:.6f}")
+        
+        custom_div = None  # Usa il valore calcolato automaticamente
     elif mode == '2':
         try:
             lsb = int(input("Numero di bit LSB da usare (1-8): ") or "4")
             msb = int(input("Numero di bit MSB da usare (1-8): ") or "4")
             if not (1 <= lsb <= 8 and 1 <= msb <= 8):
                 raise ValueError("LSB e MSB devono essere tra 1 e 8")
+                
+            # Calcola il div ottimale per i parametri scelti
+            optimal_div = calculate_optimal_div(container_img, secret_img, lsb, msb)
+            print(f"\nValore div ottimale per LSB={lsb}, MSB={msb}: {optimal_div:.6f}")
+            
+            custom_div = None
+            modify_div = input("Vuoi modificare il valore div? (s/n): ").lower().strip()
+            if modify_div in ['s', 'si', 'sì', 'y', 'yes']:
+                try:
+                    min_div = optimal_div * 0.1
+                    max_div = optimal_div * 2.0
+                    print(f"Inserisci un valore tra {min_div:.6f} e {max_div:.6f}")
+                    custom_div = float(input(f"Valore div (premere Invio per {optimal_div:.6f}): ") or optimal_div)
+                    if not (min_div <= custom_div <= max_div):
+                        print(f"ATTENZIONE: Valore fuori dal range raccomandato.")
+                        confirm = input("Continuare comunque? (s/n): ").lower().strip()
+                        if confirm not in ['s', 'si', 'sì', 'y', 'yes']:
+                            custom_div = optimal_div
+                except ValueError:
+                    print("Valore non valido. Usando il valore ottimale.")
+                    custom_div = optimal_div
+                    
         except ValueError as e:
             print(f"Input non valido: {e}")
             return
@@ -228,7 +272,7 @@ def handle_hide_image():
     
     print("\nInizio occultamento dell'immagine...")
     try:
-        hideImage(container_img, secret_img, output_path, lsb, msb)
+        hideImage(container_img, secret_img, output_path, lsb, msb, custom_div)
         print(f"\nSUCCESSO: Immagine nascosta e salvata in '{output_path}'.")
     except ValueError as e:
         print(f"\nERRORE: {e}")
@@ -252,8 +296,8 @@ def show_container_capacity(container_img: Image):
     container_pixels = container_img.width * container_img.height
     
     print(f"\n--- Capacità dell'immagine contenitore ({container_img.width}x{container_img.height} pixel) ---")
-    print("LSB | Capacità totale | Capacità disponibile | Dimensione max immagine nascosta")
-    print("----|-----------------|---------------------|--------------------------------")
+    print("LSB | Capacità disponibile | Dimensione max immagine nascosta")
+    print("----|---------------------|--------------------------------")
     
     for lsb in range(1, 9):
         # Capacità totale in bit (3 canali RGB)
@@ -263,7 +307,6 @@ def show_container_capacity(container_img: Image):
         available_capacity_bits = total_capacity_bits - METADATA_HEADER_MAX_BITS
         
         # Capacità in KB (1 KB = 1024 byte)
-        total_capacity_kb = (total_capacity_bits // 8) / 1024
         available_capacity_kb = (available_capacity_bits // 8) / 1024
         
         # Dimensione massima dell'immagine nascosta (assumendo MSB=8 per il caso peggiore)
@@ -271,7 +314,7 @@ def show_container_capacity(container_img: Image):
         max_hidden_pixels = available_capacity_bits // 24
         max_hidden_width = int(max_hidden_pixels ** 0.5)  # Approssimazione quadrata
         
-        print(f" {lsb}  | {total_capacity_kb:>11.1f} KB | {available_capacity_kb:>16.1f} KB | {max_hidden_width}x{max_hidden_width} pixel (~{max_hidden_pixels:,} pixel)")
+        print(f" {lsb}  | {available_capacity_kb:>18.1f} KB | {max_hidden_width}x{max_hidden_width} pixel (~{max_hidden_pixels:,} pixel)")
     
     print("\nNota: Le dimensioni mostrate sono approssimative e assumono MSB=8 (caso peggiore).")
     print("Con valori di MSB più bassi, è possibile nascondere immagini più grandi.")

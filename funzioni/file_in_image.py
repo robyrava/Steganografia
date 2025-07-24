@@ -139,16 +139,9 @@ def calculate_file_capacity(container_img_path: str):
         available_kb = available_bytes / 1024
         
         print(f"\n--- Capacità dell'immagine contenitore ({container_img.width}x{container_img.height} pixel) ---")
-        print(f"Capacità totale: {total_bits:,} bit")
-        print(f"Spazio riservato metadati: {METADATA_HEADER_MAX_BITS:,} bit ({METADATA_HEADER_MAX_BITS//8:,} byte)")
-        print(f"Capacità disponibile per file: {available_bits:,} bit")
+        print(f"Spazio riservato metadati: {METADATA_HEADER_MAX_BITS//8:,} byte")
         print(f"Capacità disponibile: {available_bytes:,} byte ({available_kb:.2f} KB)")
-        
-        # Raccomandazione per evitare distorsioni
-        safe_capacity_kb = available_kb * 0.1  # 10% per sicurezza
-        print(f"\nRaccomandazione: Per evitare distorsioni visibili nell'immagine,")
-        print(f"mantieni i file sotto i {safe_capacity_kb:.2f} KB.")
-        
+                
         return available_bytes
         
     except Exception as e:

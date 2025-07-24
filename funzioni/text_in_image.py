@@ -164,9 +164,7 @@ def handle_hide_text():
     max_chars = calculate_text_capacity(source_img)
     if max_chars == 0:
         return
-    
-    print(f"\nNota: Per evitare distorsioni visibili, mantieni il messaggio sotto i {max_chars//10:,} caratteri.")
-    
+        
     message = input("\nInserisci il messaggio da nascondere: ")
     if not message:
         print("ERRORE: il messaggio non può essere vuoto.")
@@ -256,9 +254,9 @@ def calculate_text_capacity(image_path: str):
         max_chars_ascii = available_bits // 7
         
         print(f"\n--- Capacità dell'immagine contenitore ({img.width}x{img.height} pixel) ---")
-        print(f"Capacità totale disponibile: {available_bits:,} bit ({available_bits/8:.1f} KB)")
-        print(f"Caratteri massimi (UTF-8 sicuro): {max_chars_safe:,} caratteri")
-        print(f"Caratteri massimi (solo ASCII): {max_chars_ascii:,} caratteri")
+        print(f"Capacità disponibile: {available_bits:,} bit ({available_bits/8:.1f} KB)")
+        print(f"Caratteri massimi (UTF-8): {max_chars_safe:,} caratteri")
+        print(f"Caratteri massimi (ASCII): {max_chars_ascii:,} caratteri")
         print(f"Pagine di testo approssimative: ~{max_chars_safe//2000:.1f} pagine (2000 caratteri/pagina)")
         
         return max_chars_safe
